@@ -1,3 +1,4 @@
+use crate::parser::{parse_msg, Msg};
 use futures_util::sink::SinkExt;
 use futures_util::StreamExt;
 use websocket_lite::{Message, Opcode, Result};
@@ -35,9 +36,33 @@ async fn main() -> Result<()> {
         if let Ok(m) = msg {
             match m.opcode() {
                 Opcode::Text => {
-                    // TODO: parse the message and do something useful with it
-                    // TODO: handle PING messages
-                    println!("MESSAGE RECEIVED: {}", m.as_text().unwrap());
+                    let text = m.as_text().unwrap();
+                    for line in text.lines() {
+                        let msg = parse_msg(line);
+
+                        println!("MESSAGE RECEIVED: {:?}", msg);
+                        match msg {
+                            Msg::Ping { server_name } => {
+                                let pong_payload = format!("PONG :{}", server_name);
+                                ws_stream.send(Message::text(pong_payload)).await?;
+                            }
+                            Msg::Join {
+                                nick,
+                                canonical_nick: _canonical_nick,
+                                channel,
+                            } => {
+                                ws_stream
+                                    .send(Message::text(format!(
+                                        "PRIVMSG #{} :Hi @{}!",
+                                        channel, nick
+                                    )))
+                                    .await?;
+                            }
+                            _ => {
+                                // TODO: implement additional behaviours if needed
+                            }
+                        }
+                    }
                 }
                 Opcode::Ping => ws_stream.send(Message::pong(m.into_data())).await?,
                 Opcode::Close => {
