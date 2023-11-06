@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     let mut ws_stream = builder.async_connect().await?;
 
     // Send capabilities requests
-    let cap_payload = "CAP REQ :twitch.tv/membership";
+    let cap_payload = "CAP REQ :twitch.tv/membership twitch.tv/tags";
     ws_stream.send(Message::text(cap_payload)).await?;
 
     // Send auth details
