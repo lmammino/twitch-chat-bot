@@ -7,32 +7,32 @@ use nom::sequence::tuple;
 use nom::{branch::alt, IResult};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PrivMsg<'a> {
+    pub user: User<'a>,
+    pub msg: &'a str,
+    pub tags: HashMap<&'a str, &'a str>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct User<'a> {
+    pub nick: &'a str,
+    pub canonical_nick: &'a str,
+    pub channel: &'a str,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Msg<'a> {
     // :gambuzzi!gambuzzi@gambuzzi.tmi.twitch.tv PRIVMSG #loige :something
     #[allow(clippy::enum_variant_names)]
-    PrivMsg {
-        nick: &'a str,
-        canonical_nick: &'a str,
-        msg: &'a str,
-        channel: &'a str,
-        tags: HashMap<&'a str, &'a str>,
-    },
+    PrivMsg(PrivMsg<'a>),
     // PING :tmi.twitch.tv
     Ping {
         server_name: &'a str,
     },
     // :01ella!01ella@01ella.tmi.twitch.tv JOIN #loige
-    Join {
-        nick: &'a str,
-        canonical_nick: &'a str,
-        channel: &'a str,
-    },
+    Join(User<'a>),
     // :zkeey!zkeey@zkeey.tmi.twitch.tv PART #loige
-    Part {
-        nick: &'a str,
-        canonical_nick: &'a str,
-        channel: &'a str,
-    },
+    Part(User<'a>),
     Other {
         msg: &'a str,
     },
@@ -58,21 +58,21 @@ fn parse_join_or_part(msg: &str) -> IResult<&str, Msg<'_>> {
     if action == " PART #" {
         return Ok((
             "",
-            Msg::Part {
+            Msg::Part(User {
                 nick,
                 canonical_nick,
                 channel,
-            },
+            }),
         ));
     }
 
     Ok((
         "",
-        Msg::Join {
+        Msg::Join(User {
             nick,
             canonical_nick,
             channel,
-        },
+        }),
     ))
 }
 
@@ -110,14 +110,16 @@ fn parse_priv_msg(msg: &str) -> IResult<&str, Msg<'_>> {
     let empty = "";
     Ok((
         empty,
-        Msg::PrivMsg {
-            nick,
-            canonical_nick,
+        Msg::PrivMsg(PrivMsg {
+            user: User {
+                nick,
+                canonical_nick,
+                channel,
+            },
             msg,
-            channel,
             // tags: tags.unwrap_or_else(|| (HashMap::new(), "")).0,
             tags: tags.map(|x| x.0).unwrap_or_default(),
-        },
+        }),
     ))
 }
 
@@ -138,13 +140,15 @@ mod tests {
         let msg = parse_msg(msg);
         assert_eq!(
             msg,
-            Msg::PrivMsg {
-                nick: "gambuzzi",
-                canonical_nick: "gambuzzi@gambuzzi.tmi.twitch.tv",
+            Msg::PrivMsg(PrivMsg {
+                user: User {
+                    nick: "gambuzzi",
+                    canonical_nick: "gambuzzi@gambuzzi.tmi.twitch.tv",
+                    channel: "loige",
+                },
                 msg: "something",
-                channel: "loige",
                 tags: HashMap::new(),
-            }
+            })
         );
     }
 
@@ -166,11 +170,11 @@ mod tests {
         let msg = parse_msg(msg);
         assert_eq!(
             msg,
-            Msg::Join {
+            Msg::Join(User {
                 nick: "01ella",
                 canonical_nick: "01ella@01ella.tmi.twitch.tv",
                 channel: "loige",
-            }
+            })
         );
     }
 
@@ -180,11 +184,11 @@ mod tests {
         let msg = parse_msg(msg);
         assert_eq!(
             msg,
-            Msg::Part {
+            Msg::Part(User {
                 nick: "01ella",
                 canonical_nick: "01ella@01ella.tmi.twitch.tv",
                 channel: "loige",
-            }
+            })
         );
     }
 
@@ -230,13 +234,15 @@ mod tests {
         .collect();
         assert_eq!(
             msg,
-            Msg::PrivMsg {
-                nick: "loige",
-                canonical_nick: "loige@loige.tmi.twitch.tv",
+            Msg::PrivMsg(PrivMsg {
+                user: User {
+                    nick: "loige",
+                    canonical_nick: "loige@loige.tmi.twitch.tv",
+                    channel: "loige",
+                },
                 msg: "hello, do you like PogChamp or loigeCrab ?",
-                channel: "loige",
                 tags: expected_tags,
-            }
+            })
         );
     }
 
