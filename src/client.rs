@@ -1,35 +1,38 @@
+use std::future::Future;
 use crate::parser::{parse_msg, Msg, PrivMsg, User};
 use futures_util::sink::SinkExt;
 use futures_util::StreamExt;
+use tokio::sync::Mutex;
 use websocket_lite::{AsyncClient, AsyncNetworkStream, Message, Opcode, Result};
 
-type PrivMessageListener = Box<dyn FnMut(PrivMsg)>;
-type JoinOrPartListener = Box<dyn FnMut(User)>;
+type PrivMessageListener = Box<dyn Fn(PrivMsg, &ConnectClient) -> dyn Future<Output=()>>;
+type JoinOrPartListener = Box<dyn Fn(User, &ConnectClient) -> dyn Future<Output=()>>;
 
 pub struct Client {
     channel: String,
     nick: String,
-    twitch_token: String,
-    socket: Option<AsyncClient<Box<dyn AsyncNetworkStream + Send + Sync + Unpin>>>,
     on_priv_msg: Vec<PrivMessageListener>,
     on_join: Vec<JoinOrPartListener>,
     on_part: Vec<JoinOrPartListener>,
 }
 
+pub struct ConnectClient {
+    client: Client,
+    socket: Mutex<AsyncClient<Box<dyn AsyncNetworkStream + Send + Sync + Unpin>>>,
+}
+
 impl Client {
-    pub fn new(channel: String, nick: String, twitch_token: String) -> Self {
+    pub fn new(channel: String, nick: String) -> Self {
         Self {
             channel,
             nick,
-            twitch_token,
-            socket: None,
             on_priv_msg: Vec::new(),
             on_join: Vec::new(),
             on_part: Vec::new(),
         }
     }
 
-    pub async fn connect(&mut self) -> Result<()> {
+    pub async fn connect(self, twitch_token: String) -> Result<ConnectClient> {
         let builder = websocket_lite::ClientBuilder::new("wss://irc-ws.chat.twitch.tv:443")?;
         let mut ws_stream = builder.async_connect().await?;
 
@@ -38,7 +41,7 @@ impl Client {
         ws_stream.send(Message::text(cap_payload)).await?;
 
         // Send auth details
-        let auth_payload = format!("PASS oauth:{}", self.twitch_token);
+        let auth_payload = format!("PASS oauth:{}", twitch_token);
         ws_stream.send(Message::text(auth_payload)).await?;
         // let msg = ws_stream.next().await;
         // println!("AUTH RESPONSE: {:?}", msg);
@@ -53,9 +56,10 @@ impl Client {
         let join_payload = format!("JOIN #{}", self.channel);
         ws_stream.send(Message::text(join_payload)).await?;
 
-        self.socket = Some(ws_stream);
-
-        Ok(())
+        Ok(ConnectClient {
+            client: self,
+            socket: Mutex::new(ws_stream),
+        })
     }
 
     pub fn add_priv_msg_listener(&mut self, listener: PrivMessageListener) {
@@ -69,21 +73,23 @@ impl Client {
     pub fn add_part_listener(&mut self, listener: JoinOrPartListener) {
         self.on_part.push(listener);
     }
+}
 
-    pub async fn send_msg(&mut self, msg: &str) -> Result<()> {
-        let ws_stream = self.socket.as_mut().unwrap();
-        ws_stream
+impl ConnectClient {
+    pub async fn send_msg(&self, msg: &str) -> Result<()> {
+        self.socket
+            .lock()
+            .await
             .send(Message::text(&format!(
                 "PRIVMSG #{} :{}!",
-                self.channel, msg
+                self.client.channel, msg
             )))
             .await?;
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<()> {
-        let ws_stream = self.socket.as_mut().unwrap();
-        while let Some(msg) = ws_stream.next().await {
+    pub async fn run(&self) -> Result<()> {
+        while let Some(msg) = self.socket.lock().await.next().await {
             if let Ok(m) = msg {
                 match m.opcode() {
                     Opcode::Text => {
@@ -95,11 +101,15 @@ impl Client {
                             match msg {
                                 Msg::Ping { server_name } => {
                                     let pong_payload = format!("PONG :{}", server_name);
-                                    ws_stream.send(Message::text(pong_payload)).await?;
+                                    self.socket
+                                        .lock()
+                                        .await
+                                        .send(Message::text(pong_payload))
+                                        .await?;
                                 }
-                                Msg::Join(user) => {
-                                    for listener in &mut self.on_join {
-                                        listener(user.clone());
+                                Msg::PrivMsg(msg) => {
+                                    for listener in &self.client.on_priv_msg {
+                                        listener(msg.clone(), self).await;
                                     }
 
                                     // ws_stream
@@ -115,17 +125,23 @@ impl Client {
                             }
                         }
                     }
-                    Opcode::Ping => ws_stream.send(Message::pong(m.into_data())).await?,
+                    Opcode::Ping => {
+                        self.socket
+                            .lock()
+                            .await
+                            .send(Message::pong(m.into_data()))
+                            .await?
+                    }
                     Opcode::Close => {
                         println!("Received close message");
-                        let _ = ws_stream.send(Message::close(None)).await;
+                        let _ = self.socket.lock().await.send(Message::close(None)).await;
                         break;
                     }
                     Opcode::Pong | Opcode::Binary => {}
                 }
             } else {
                 println!("Error reading message: {:?}", msg);
-                let _ = ws_stream.send(Message::close(None)).await;
+                let _ = self.socket.lock().await.send(Message::close(None)).await;
                 break;
             }
         }
