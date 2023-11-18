@@ -11,15 +11,17 @@ mod parser;
 struct Reply {}
 
 impl PrivMessageListenerT for Reply {
-    fn on_priv_msg<'s, 'p, 'b, 'sender, 'output>(&'s self, msg: &'p PrivMsg<'b>, sender: &'sender mut MySender) -> BoxFuture<'output, ()>
+    fn on_priv_msg<'sel, 'msg, 'body, 'sender, 'output>(&'sel self, msg: &'msg PrivMsg<'body>, sender: &'sender mut MySender) -> BoxFuture<'output, ()>
     where
-            'p: 's,
-            'b: 's,
-            'sender: 's,
-            'sender: 'output
+            'msg: 'sel,
+            'body: 'sel,
+            'sender: 'sel,
+            'sender: 'output,
+            'msg: 'output,
+            'body: 'output
     {
         Box::pin(async move {
-            sender.send_text("Hello!").await.unwrap();
+            sender.send_text(format!("Hello {}! How are you?", msg.user.nick).as_str()).await.unwrap();
         })
     }
 }

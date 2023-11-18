@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::parser::{parse_msg, Msg, PrivMsg, User};
 use futures_util::future::BoxFuture;
 use futures_util::stream::SplitSink;
-use futures_util::{sink::SinkExt};
+use futures_util::sink::SinkExt;
 use futures_util::StreamExt;
 use tokio::sync::Mutex;
 use websocket_lite::{AsyncClient, AsyncNetworkStream, Message, Opcode, Result};
@@ -11,14 +11,18 @@ use websocket_lite::{AsyncClient, AsyncNetworkStream, Message, Opcode, Result};
 pub trait PrivMessageListenerT {
     fn on_priv_msg<'sel, 'msg, 'body, 'sender, 'output>(&'sel self, msg: &'msg PrivMsg<'body>, sender: &'sender mut MySender) -> BoxFuture<'output, ()>
         where
-            // 'p > 's
+            // 'msg >= 'sel
             'msg: 'sel,
-            // 'b > 's
+            // 'body >= 'sel
             'body: 'sel,
-            // 'sender > 's
+            // 'sender >= 'sel
             'sender: 'sel,
-            // 'p > 's
-            'sender: 'output
+            // 'sender >= 'output
+            'sender: 'output,
+            // 'msg >= 'output
+            'msg: 'output,
+            // 'body >= 'output
+            'body: 'output
         ;
 }
 
